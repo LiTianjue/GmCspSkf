@@ -9,7 +9,7 @@
 *.so
 *.dll
 *.dylib
-
+!WIN_QT_SKF/SKFTest/lib/*.dll
 # Qt-es
 
 /.qmake.cache
