@@ -8,6 +8,7 @@
 
 #include <windows.h>
 #include "test.cpp"
+#include "include/openssl_helper.h"
 
 using namespace std;
 
@@ -101,5 +102,31 @@ int main(int argc, char *argv[])
 
     //ret =  change_pin("111111","111111");
 
+    /*********************************************************/
+
+    EC_KEY *eckey = NULL;
+    eckey = load_key("sm2_client.key",1);
+    if(eckey == NULL) {
+        printf("read ECC key ERROR.\n");
+    }
+
+
     return 0;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

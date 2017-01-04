@@ -787,6 +787,162 @@ u32 ECC_ImportKeyAndCert(DEVHANDLE hDev, HCONTAINER hCont)
 
 
 
+/************************************************************************/
+// china-core 侧测试程序程序
+#include "include/test_key.h"
+u32 ECC_ImportKeyAndCert_2(DEVHANDLE hDev, HCONTAINER hCont)
+{
+    /*
+    u8 keypair[] = {
+        //x
+        0x19, 0x79, 0x5d, 0xf7, 0x01, 0xf3, 0x9d, 0x1f, 0xb2, 0x20, 0xc4, 0x5f, 0xa7, 0xfa, 0x4e, 0xbf,
+        0xad, 0xd1, 0x70, 0x25, 0x37, 0xb9, 0x46, 0xcd, 0x3d, 0x48, 0x04, 0xb3, 0x7f, 0xbc, 0x3e, 0xa5,
+        //y
+        0x2b, 0x2c, 0xee, 0xd6, 0xcc, 0x04, 0x2b, 0x5b, 0xbb, 0x56, 0x8d, 0xed, 0x3b, 0x36, 0x73, 0xf2,
+        0x88, 0xe1, 0x9c, 0xc4, 0x9a, 0xe3, 0xc3, 0x50, 0xd2, 0xb8, 0x09, 0x03, 0xd8, 0x6d, 0x91, 0x2c,
+        //d
+        0x3f, 0x91, 0x68, 0xe8, 0x6d, 0x2a, 0xac, 0xaa, 0x2c, 0x81, 0xd8, 0xba, 0x24, 0x9b, 0xc9, 0x5a,
+        0x60, 0xe0, 0x47, 0x50, 0xa2, 0xee, 0xaa, 0x63, 0x26, 0x2b, 0x54, 0xc4, 0x75, 0x51, 0xb8, 0xdc
+    };
+    */
+    u8 keypair[32+32+32] = {0};
+    memcpy(keypair,test_keypair,32+32+32);
+
+    u8 cert[2048] = {0};
+    FILE *fp = NULL;
+    u8 data[2048] = {0};
+    u32 data_len = 0;
+
+    ULONG ret, len = 128;
+    ECCPUBLICKEYBLOB pub;
+    HANDLE hKey;
+    BLOCKCIPHERPARAM bp;
+    u8 encryptkey[1024];
+    u8 key[16] = {0x47, 0x50, 0x42, 0x02, 0x20, 0x3F, 0xE1, 0x92, 0x66, 0x2A, 0xCB, 0xD2, 0x9D, 0, 0, 0};
+
+    // import der cert file
+    fp = fopen("sm2_client.der","rb");
+    if(fp == NULL) {
+        printf("Open file [%s] Fail.\n","sm2_client.der");
+        return -1;
+    }
+
+    data_len = fread(cert,1,4096,fp);
+    if(data_len <=0 ) {
+        printf("Read file [%s] Fail.\n","sm2_client.der");
+        fclose(fp);
+        return -1;
+    }
+    fclose(fp);
+
+
+    PENVELOPEDKEYBLOB env = (PENVELOPEDKEYBLOB)encryptkey;
+
+    bp.PaddingType = 0;
+    bp.IVLen = 0;
+    bp.FeedBitLen = 0;
+
+    memset(encryptkey, 0 ,1024);
+
+    env->Version = 1;
+    env->ulBits = 256;
+    env->PubKey.BitLen = 256;
+    env->ulSymmAlgID = SGD_SM1_ECB;
+    memcpy(env->PubKey.XCoordinate + 32, keypair, 32);
+    memcpy(env->PubKey.YCoordinate + 32, keypair + 32, 32);
+
+    len = 1024;
+    ret = FunctionList->SKF_ExportPublicKey(hCont, 0, encryptkey, &len);
+    if(ret == 0)//已经存在密钥不导入
+        return 0;
+
+    LOG("Use SIGN KEY public key encrypt a symmetric key first then use this symmetric key encrypt the ENCRYPT KEY \n");
+
+    len = sizeof(ECCPUBLICKEYBLOB);
+    ret = FunctionList->SKF_ExportPublicKey(hCont, 1, (u8*)&pub, &len);
+    if(ret)
+    {
+        if(ret == SAR_KEYNOTFOUNTERR)
+        {
+            ret = FunctionList->SKF_GenECCKeyPair(hCont, SGD_SM2_1, &pub);
+            if(ret)
+            {
+                LOG("SKF_GenECCKeyPair for SIGN KEY error : 0x%x\n", ret);
+                return ret;
+            }
+        }
+        else
+        {
+            LOG("SKF_ExportPublicKey for SIGN KEY error : 0x%x\n", ret);
+            return ret;
+        }
+    }
+#if 1
+    ret = FunctionList->SKF_ExtECCEncrypt(hDev, &pub, key, 16, &env->ECCCipherBlob);
+    if(ret)
+    {
+        LOG("SKF_ExtECCEncrypt error : 0x%x\n", ret);
+        return ret;
+    }
+    ret = FunctionList->SKF_SetSymmKey(hDev, key, SGD_SM1_ECB, &hKey);
+    if(ret)
+    {
+        LOG("SKF_SetSymmKey error : 0x%x\n", ret);
+        return ret;
+    }
+#else
+    ret = SKF_ECCExportSessionKey(hCont, SGD_SM1_ECB, &pub, &env->ECCCipherBlob, &hKey);
+    if(ret)
+    {
+        LOG("SKF_ECCExportSessionKey error : 0x%x\n", ret);
+        return ret;
+    }
+
+    ret = SKF_ImportSessionKey(hCont, SGD_SM1_ECB, (u8*)&env->ECCCipherBlob, sizeof(ECCCIPHERBLOB) + env->ECCCipherBlob.CipherLen - 1, &hKey);
+    if(ret)
+    {
+        LOG("SKF_ImportSessionKey error : 0x%x\n", ret);
+        return ret;
+    }
+#endif
+    ret = FunctionList->SKF_EncryptInit(hKey, bp);
+    if(ret)
+    {
+        LOG("SKF_EncryptInit error : 0x%x\n", ret);
+        return ret;
+    }
+
+    len = 32;
+    ret = FunctionList->SKF_Encrypt(hKey, keypair + 64, 32, env->cbEncryptedPriKey + 32, &len);
+    if(ret)
+    {
+        LOG("SKF_Encrypt error : 0x%x\n", ret);
+        return ret;
+    }
+
+    ret = FunctionList->SKF_ImportECCKeyPair(hCont, env);
+    if(ret)
+    {
+        LOG("SKF_ImportECCKeyPair error : 0x%x\n", ret);
+        return ret;
+    }
+
+    //ret = FunctionList->SKF_ImportCertificate(hCont, 0, cert, sizeof(cert));
+    ret = FunctionList->SKF_ImportCertificate(hCont, 0, cert, data_len);
+    if(ret)
+    {
+        LOG("SKF_ImportCertificate error : 0x%x\n", ret);
+        return ret;
+    }
+
+    return 0;
+}
+/******************************************************************************/
+
+
+
+
+
 
 
 
@@ -796,7 +952,8 @@ u32 import_sm2_cert()
 {
     u32 ret ;
 
-    ret =ECC_ImportKeyAndCert(*devHandle,hContainer);
+    //ret =ECC_ImportKeyAndCert(*devHandle,hContainer);
+    ret =ECC_ImportKeyAndCert_2(*devHandle,hContainer);
     if(ret){
         PRINT_KDF_ERROR(ret);
     }
